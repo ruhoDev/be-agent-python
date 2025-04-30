@@ -1,0 +1,161 @@
+# Simple Chat Agency
+
+---
+
+- **Purpose:** A collaborative agent system designed to manage, process, and assist with chat interactions. This agency handles incoming chat messages, analyzes their content, and provides helpful responses to users in a conversational manner.
+- **Communication Flows:**
+    - **Between Agents:**
+        - **Chat Manager -> Chat Processor:** Chat Manager forwards incoming messages to Chat Processor for analysis and content processing.
+        - **Chat Processor -> Chat Assistant:** Chat Processor sends analyzed content to Chat Assistant for response generation.
+        - **Chat Assistant -> Chat Manager:** Chat Assistant sends generated responses back to Chat Manager for delivery to the user.
+    - **Agent to User Communication:** The Chat Manager agent is the primary interface with end-users, handling incoming messages and delivering responses.
+
+---
+
+## Chat Manager
+
+### **Role within the Agency**
+
+The Chat Manager serves as the main entry point for user interactions. It receives incoming messages, routes them to the appropriate agents, and delivers responses back to users.
+
+### Tools
+
+- **ReceiveMessage:**
+    - **Description**: Receives messages from the user and prepares them for processing.
+    - **Inputs**:
+        - message (str) - The message content received from the user
+        - user_id (str) - Unique identifier for the user
+    - **Validation**:
+        - Message not empty - Ensures the message contains content
+    - **Core Functions:** Parse incoming messages, format them for internal processing.
+    - **Output**: A formatted string containing the message and user information.
+
+- **SendResponse:**
+    - **Description**: Sends a response back to the user.
+    - **Inputs**:
+        - response (str) - The response content to send to the user
+        - user_id (str) - Unique identifier for the user
+    - **Validation**:
+        - Response not empty - Ensures the response contains content
+    - **Core Functions:** Format the response for delivery, deliver response to user.
+    - **Output**: A confirmation string indicating the response was sent.
+
+- **ManageConversationHistory:**
+    - **Description**: Manages the conversation history for each user.
+    - **Inputs**:
+        - user_id (str) - Unique identifier for the user
+        - action (str) - The action to perform (get, add, clear)
+        - message (str, optional) - The message to add to history
+    - **Validation**:
+        - Valid action - Ensures the action is one of: get, add, clear
+    - **Core Functions:** Store conversation history, retrieve past conversations, clear history.
+    - **Output**: The conversation history as a string or confirmation of the action.
+
+- **CheckUserStatus:**
+    - **Description**: Checks the status of a user (online, offline, active, inactive).
+    - **Inputs**:
+        - user_id (str) - Unique identifier for the user
+    - **Validation**:
+        - Valid user ID - Ensures the user ID exists in the system
+    - **Core Functions:** Check if user is online, determine activity status.
+    - **Output**: A string indicating the user's current status.
+
+---
+
+## Chat Processor
+
+### **Role within the Agency**
+
+The Chat Processor analyzes and processes the content of chat messages. It identifies the intent, sentiment, and key information in the messages to prepare them for response generation.
+
+### Tools
+
+- **AnalyzeSentiment:**
+    - **Description**: Analyzes the sentiment of a message (positive, negative, neutral).
+    - **Inputs**:
+        - message (str) - The message to analyze
+    - **Validation**:
+        - Message not empty - Ensures the message contains content
+    - **Core Functions:** Determine message sentiment, score sentiment intensity.
+    - **Output**: A JSON object containing sentiment analysis results.
+
+- **ExtractKeywords:**
+    - **Description**: Extracts key topics and keywords from a message.
+    - **Inputs**:
+        - message (str) - The message to extract keywords from
+    - **Validation**:
+        - Message not empty - Ensures the message contains content
+    - **Core Functions:** Identify main topics, extract important keywords.
+    - **Output**: A list of keywords as a JSON array.
+
+- **CategorizeMessage:**
+    - **Description**: Categorizes a message into predefined categories (question, statement, request, etc.).
+    - **Inputs**:
+        - message (str) - The message to categorize
+    - **Validation**:
+        - Message not empty - Ensures the message contains content
+    - **Core Functions:** Identify message type, categorize message purpose.
+    - **Output**: A string indicating the message category.
+
+- **DetectLanguage:**
+    - **Description**: Detects the language of a message.
+    - **Inputs**:
+        - message (str) - The message to analyze
+    - **Validation**:
+        - Message not empty - Ensures the message contains content
+    - **Core Functions:** Identify the language of the text.
+    - **Output**: A string indicating the detected language code.
+
+---
+
+## Chat Assistant
+
+### **Role within the Agency**
+
+The Chat Assistant generates helpful, contextually appropriate responses to user messages based on the processed information from the Chat Processor.
+
+### Tools
+
+- **GenerateResponse:**
+    - **Description**: Generates a response to a user's message based on the context and intent.
+    - **Inputs**:
+        - message (str) - The original user message
+        - sentiment (str) - The sentiment of the message
+        - category (str) - The category of the message
+        - keywords (list) - List of keywords from the message
+    - **Validation**:
+        - Message not empty - Ensures the message contains content
+    - **Core Functions:** Create contextually relevant responses, format responses appropriately.
+    - **Output**: A string containing the generated response.
+
+- **TranslateResponse:**
+    - **Description**: Translates a response to a different language.
+    - **Inputs**:
+        - response (str) - The response to translate
+        - target_language (str) - The language code to translate to
+    - **Validation**:
+        - Response not empty - Ensures the response contains content
+        - Valid language code - Ensures the target language is supported
+    - **Core Functions:** Translate text to target language.
+    - **Output**: A string containing the translated response.
+
+- **FormatResponseForPlatform:**
+    - **Description**: Formats a response for a specific platform or channel.
+    - **Inputs**:
+        - response (str) - The response to format
+        - platform (str) - The platform to format for (SMS, email, web, etc.)
+    - **Validation**:
+        - Response not empty - Ensures the response contains content
+        - Valid platform - Ensures the platform is supported
+    - **Core Functions:** Apply platform-specific formatting, adjust response length.
+    - **Output**: A string containing the formatted response.
+
+- **GenerateSuggestions:**
+    - **Description**: Generates suggested replies or next steps for the user.
+    - **Inputs**:
+        - context (str) - The current conversation context
+        - count (int) - Number of suggestions to generate
+    - **Validation**:
+        - Valid count - Ensures the count is a positive integer
+    - **Core Functions:** Create relevant suggestions based on context.
+    - **Output**: A list of suggested replies as a JSON array. 
