@@ -1,30 +1,100 @@
 from agency_swarm import Agency
-from chat_manager import ChatManager
-from chat_processor import ChatProcessor
-from chat_assistant import ChatAssistant
+from agency_swarm import Agent
 from dotenv import load_dotenv
+from chat_manager import ChatManager
+from firebase_service import FirebaseService
+import os
 
 load_dotenv()
 
-# Initialize the agents
-chat_manager = ChatManager()
-chat_processor = ChatProcessor()
-chat_assistant = ChatAssistant()
+# Initialize Firebase service for conversation storage
+firebase_service = FirebaseService()
 
-# Define the agency with communication flows and enable async mode
-agency = Agency(
-    [
-        chat_manager,  # Chat Manager will be the entry point for communication with the user
-        [chat_manager, chat_processor],  # Chat Manager can communicate with Chat Processor
-        [chat_processor, chat_assistant],  # Chat Processor can communicate with Chat Assistant
-        [chat_assistant, chat_manager],  # Chat Assistant can communicate with Chat Manager
-    ],
-    shared_instructions="agency_manifesto.md",  # Shared instructions for all agents
-    temperature=0.4,  # Default temperature for all agents
-    max_prompt_tokens=25000,  # Default max tokens in conversation history
-    async_mode="threading"  # Enable async mode with asyncio instead of threading
-)
+def get_threads_from_db(conversation_id):
+    """
+    Load conversation threads from Firestore database
+    
+    Args:
+        conversation_id: Unique identifier for the conversation (channel:thread_id)
+        
+    Returns:
+        Dictionary of conversation threads or empty dict if not found
+    """
+    try:
+        doc = firebase_service.db.collection('slack_conversations').document(conversation_id).get()
+        if doc.exists:
+            return doc.to_dict().get('threads', {})
+        else:
+            return {}
+    except Exception as e:
+        print(f"Error loading threads from database: {str(e)}")
+        return {}
 
-if __name__ == "__main__":
-    agency.demo_gradio()
-    agency.run_demo()  # Run the agency in terminal demo mode
+def save_threads_to_db(conversation_id, threads):
+    """
+    Save conversation threads to Firestore database
+    
+    Args:
+        conversation_id: Unique identifier for the conversation (channel:thread_id)
+        threads: Dictionary of conversation threads to save
+    """
+    try:
+        firebase_service.db.collection('slack_conversations').document(conversation_id).set({
+            'threads': threads
+        })
+    except Exception as e:
+        print(f"Error saving threads to database: {str(e)}")
+
+def generate_response(message, conversation_id=None, agent_config=None):
+    """
+    Generate a response from the agency
+    
+    Args:
+        message: The user message to process
+        conversation_id: Optional unique identifier for the conversation (channel:thread_id)
+        agent_config: Optional agent configuration to customize response parameters
+        
+    Returns:
+        Generated response from the agency
+    """
+    agents = []
+
+    # If conversation_id is provided, use thread persistence
+    if conversation_id and agent_config:
+        agent = Agent(
+            name=agent_config.get('name', 'Assistant'),
+            description=agent_config.get('description', ''),
+            instructions=agent_config.get('instructions', ''),
+            temperature=agent_config.get('temperature', 0.4),
+            max_prompt_tokens=agent_config.get('max_tokens', 25000),
+            # model=agent_config.get('model', 'gpt-4o-mini')
+        )
+        agents.append(agent)
+
+    # If no agents were configured, use a default agent
+    if not agents:
+        default_agent = Agent(
+            name="Assistant",
+            description="A helpful AI assistant",
+            instructions="You are a helpful AI assistant that provides accurate and concise responses.",
+            temperature=0.4,
+            max_prompt_tokens=25000
+        )
+        agents.append(default_agent)
+    
+    # Create a new agency instance with thread persistence
+    agency = Agency(
+        agents,
+        temperature=agent_config.get('temperature', 0.4) if agent_config else 0.4,
+        max_prompt_tokens=agent_config.get('max_tokens', 25000) if agent_config else 25000,
+        # model=agent_config.get('model', 'gpt-4o-mini') if agent_config else 'gpt-4o-mini',
+        threads_callbacks={
+            "load": lambda: get_threads_from_db(conversation_id),
+            "save": lambda threads: save_threads_to_db(conversation_id, threads),
+        }
+    )
+        
+    # Get completion from the temporary agency
+    completion = agency.get_completion(message, yield_messages=False)
+    print('completion', completion)
+    return completion
