@@ -11,41 +11,6 @@ from typing import Optional
 load_dotenv()
 
 @dataclass
-class SlackConfig:
-    """Slack API configuration"""
-    bot_token: Optional[str] = None
-    signing_secret: Optional[str] = None
-    app_token: Optional[str] = None
-    
-    @classmethod
-    def from_env(cls):
-        """Create from environment variables"""
-        return cls(
-            bot_token=os.environ.get("SLACK_BOT_TOKEN"),
-            signing_secret=os.environ.get("SLACK_SIGNING_SECRET"),
-            app_token=os.environ.get("SLACK_APP_TOKEN")
-        )
-    
-    @property
-    def is_configured(self):
-        """Check if required slack settings are configured"""
-        return self.bot_token is not None and self.signing_secret is not None
-
-@dataclass
-class AsyncConfig:
-    """Async processing configuration"""
-    max_workers: int = 10
-    task_timeout: int = 60
-    
-    @classmethod
-    def from_env(cls):
-        """Create from environment variables"""
-        return cls(
-            max_workers=int(os.environ.get("MAX_WORKERS", 10)),
-            task_timeout=int(os.environ.get("TASK_TIMEOUT", 60))
-        )
-
-@dataclass
 class FlaskConfig:
     """Flask web server configuration"""
     debug: bool = False
@@ -87,8 +52,6 @@ class OpenAIConfig:
 @dataclass
 class AppConfig:
     """Main application configuration"""
-    slack: SlackConfig
-    async_config: AsyncConfig
     flask: FlaskConfig
     openai: OpenAIConfig
     
@@ -96,8 +59,6 @@ class AppConfig:
     def from_env(cls):
         """Create from environment variables"""
         return cls(
-            slack=SlackConfig.from_env(),
-            async_config=AsyncConfig.from_env(),
             flask=FlaskConfig.from_env(),
             openai=OpenAIConfig.from_env()
         )

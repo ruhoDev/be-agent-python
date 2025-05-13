@@ -1,7 +1,6 @@
 from agency_swarm import Agency
 from agency_swarm import Agent
 from dotenv import load_dotenv
-from chat_manager import ChatManager
 from firebase_service import FirebaseService
 import os
 

@@ -1,19 +1,11 @@
-from slack_bolt import App
-from slack_bolt.adapter.flask import SlackRequestHandler
-from slack_bolt.adapter.socket_mode import SocketModeHandler
 from flask import Flask, request, jsonify
+from slack_service import SlackService
+from firebase_service import FirebaseService
+from agency import generate_response
 from dotenv import load_dotenv
 import os
-import asyncio
-import re
-import concurrent.futures
-from functools import partial
-from agency import agency
-import threading
-import atexit
-
-# Import custom utilities
-from utils import logger, error_handler, async_manager, config
+import time
+from utils import logger, error_handler, config
 
 # Initialize logging
 log = logger.get_logger(__name__)
@@ -22,181 +14,224 @@ log = logger.get_logger(__name__)
 load_dotenv()
 app_config = config.AppConfig.from_env()
 
-# Initialize the Slack app if credentials are available
-bolt_app = None
-handler = None
-if app_config.slack.is_configured:
-    log.info("Initializing Slack app with provided credentials")
-    bolt_app = App(token=app_config.slack.bot_token, signing_secret=app_config.slack.signing_secret)
-    flask_app = Flask(__name__)
-    handler = SlackRequestHandler(bolt_app)
-else:
-    log.warning("Slack credentials not found, Slack integration will be disabled")
-    flask_app = Flask(__name__)
+# Initialize services
+firebase_service = FirebaseService()
+slack_service = SlackService()
 
-# Thread pool for running synchronous agency methods
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=app_config.async_config.max_workers)
-log.info(f"Initialized thread pool with {app_config.async_config.max_workers} workers")
+# Initialize Flask app
+flask_app = Flask(__name__)
 
-# Event loop for async operations
-loop = None
+# Event tracking system to prevent duplicate processing of Slack webhooks
+# Slack sends webhooks every 20 seconds, requiring deduplication
+# Data structure: {event_id: timestamp}
+processed_events = {}
+EVENT_EXPIRY_TIME = 60  # Seconds to keep events in memory
 
-@error_handler.async_handle_errors
-async def process_message_async(text):
-    """Process a message through the agency asynchronously"""
+def clean_old_events():
+    """Remove old events from the processed_events dict"""
+    current_time = time.time()
+    to_remove = []
+    for event_id, timestamp in processed_events.items():
+        if current_time - timestamp > EVENT_EXPIRY_TIME:
+            to_remove.append(event_id)
+    
+    for event_id in to_remove:
+        processed_events.pop(event_id, None)
+
+def process_message(text, conversation_id=None, agent_config=None):
+    """Process a message through the agency"""
     try:
-        # Run agency with timeout protection
-        timeout = app_config.async_config.task_timeout
-        log.info(f"Processing message with timeout {timeout}s: {text[:50]}{'...' if len(text) > 50 else ''}")
-        
-        result = await asyncio.wait_for(
-            async_get_completion(text), 
-            timeout=timeout
-        )
+        # Use the generate_response function from agency.py
+        result = generate_response(text, conversation_id, agent_config)
         return result
-    except asyncio.TimeoutError:
-        log.warning(f"Message processing timed out after {timeout}s")
-        return "⏱️ The response timed out. Please try a shorter or simpler query."
     except Exception as e:
-        log.error(f"Error processing message: {str(e)}", exc_info=True)
         error_id = error_handler.generate_error_id()
-        error_handler.report_error(error_id, e)
-        return error_handler.format_error_for_user(e)
+        log.error(
+            f"Error in process_message: {str(e)}",
+            exc_info=True,
+            extra={"error_id": error_id}
+        )
+        raise e
 
-async def async_get_completion(text):
-    """Wrapper to make synchronous get_completion work asynchronously"""
-    loop = asyncio.get_running_loop()
-    # Run the synchronous method in a thread pool
-    return await loop.run_in_executor(
-        executor,  # Use our thread pool
-        lambda: agency.get_completion(text, yield_messages=False)
-    )
-
-@error_handler.async_handle_errors
-async def process_slack_message_async(text, say):
-    """Handle Slack messages by processing them through the agency asynchronously"""
-    # Set request context for logging
-    request_id = logger.set_request_context()
-    log.info(f"[Slack] Processing: {text[:50]}{'...' if len(text) > 50 else ''}")
+def setup_bot_handlers(slack_app, agent_config):
+    """Set up event handlers for a Slack bot"""
+    print(f"Setting up handlers for bot with agent config: {agent_config['name'] if agent_config else 'None'}")
     
+    # Use separate handlers for app_mention and message to better control the flow
+    @slack_app.event("app_mention")
+    def handle_app_mention(event, say):
+        # Generate unique event ID
+        event_id = f"{event.get('client_msg_id', '')}:{event.get('ts', '')}"
+        
+        # Skip if we've already processed this event
+        if event_id in processed_events:
+            log.info(f"Skipping already processed app_mention event: {event_id}")
+            return
+        
+        # Mark as processed
+        processed_events[event_id] = time.time()
+        clean_old_events()
+        
+        # Skip messages from bots
+        if event.get("bot_id"):
+            return
+            
+        # Skip messages in threads
+        if event.get("thread_ts"):
+            return
+            
+        # Process the app mention
+        _process_event(event, say, agent_config, slack_app, is_app_mention=True)
+    
+    @slack_app.event("message")
+    def handle_message(event, say):
+        # Only process messages, not message subtypes like message_changed, message_deleted, etc.
+        if event.get("subtype") is not None:
+            return
+
+        # Skip messages from bots
+        if event.get("bot_id"):
+            return
+            
+        # Skip messages in threads
+        if event.get("thread_ts"):
+            return
+         
+        # Generate unique event ID
+        event_id = f"{event.get('client_msg_id', '')}:{event.get('ts', '')}"
+        
+        # Skip if we've already processed this event
+        if event_id in processed_events:
+            log.info(f"Skipping already processed message event: {event_id}")
+            return
+        
+        # Mark as processed
+        processed_events[event_id] = time.time()
+        clean_old_events()
+                
+        # Process regular message
+        _process_event(event, say, agent_config, slack_app, is_app_mention=False)
+
+def _process_event(event, say, agent_config, slack_app, is_app_mention=False):
+    """Internal function to process an event after filtering""" 
+    # Get user information
     try:
-        # Process the message asynchronously
-        result = await process_message_async(text)
-        log.info(f"[Slack] Result generated successfully")
-        say(result)
+        user_id = event["user"]
+        user_info = slack_app.client.users_info(user=user_id)
+        message_text = event.get("text", "")
+        # Get user's real name
+        real_name = user_info["user"]["profile"]["real_name"]
+        
+        # Create full message with user name
+        message = real_name + ": " + message_text
+        
+        # Create conversation ID from channel and thread/message ID
+        conversation_id = f"{event['channel']}:{event.get('thread_ts', event['ts'])}"
+                
+        # Generate response from the agency with conversation persistence
+        response = process_message(message, conversation_id, agent_config)
+        say(
+            text=response,
+        )
+        
     except Exception as e:
         error_id = error_handler.generate_error_id()
-        log.error(f"[Slack] Error: {str(e)}", exc_info=True, extra={"error_id": error_id})
-        error_msg = error_handler.format_error_for_user(e)
-        say(error_msg)
+        log.error(
+            f"Error in _process_event: {str(e)}",
+            exc_info=True,
+            extra={"error_id": error_id}
+        )
+        raise e
 
-def clean_user_text(user_text):
-    # Find all user mentions in the format <@U12345678>
-    user_mentions = re.findall(r'<@([A-Z0-9]+)>', user_text)
-    
-    # Replace each user mention with a cleaner format
-    clean_text = user_text
-    for user_id in user_mentions:
-        try:
-            # Get user info from Slack API
-            user_info = bolt_app.client.users_info(user=user_id)
-            user_name = user_info["user"]["real_name"]
-            # Replace the mention with the user's name
-            clean_text = clean_text.replace(f"<@{user_id}>", f"@{user_name}")
-        except Exception as e:
-            print(f"Error getting user info: {str(e)}")
-            # If we can't get the user info, just remove the mention format
-            clean_text = clean_text.replace(f"<@{user_id}>", f"@user")
-    
-    return clean_text
-
-def submit_async_task(coroutine, task_name=None):
-    """Submit an async task to the event loop"""
-    # Use the improved async manager
-    return async_manager.submit_async_task(coroutine, task_name)
-
-# Example: Event listener for app mentions
-@bolt_app.event("app_mention")
-def handle_app_mention(event, say):
-    user_text = event.get("text", "")
-    clean_text = clean_user_text(user_text)
-    
-    print(f"[Slack] Incoming app_mention: {clean_text}")
-    # Submit the async task to the event loop
-    submit_async_task(process_slack_message_async(clean_text, say))
-
-@bolt_app.event("message")
-def handle_message(event, say):
-    # Skip messages from bots
-    if event.get("bot_id"):
-        return
-        
-    # Skip messages in threads
-    if event.get("thread_ts"):
-        return
-        
-    user_text = event.get("text", "")
-    clean_text = clean_user_text(user_text)
-    
-    print(f"[Slack] Incoming message: {clean_text}")
-    # Submit the async task to the event loop
-    submit_async_task(process_slack_message_async(clean_text, say))
-
-# Flask endpoint for Slack events
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
-
-# Flask root (optional)
-@flask_app.route("/")
-def index():
-    return "Slack bot is running!"
-
-def start_event_loop():
-    """Start the event loop in a separate thread"""
-    # Use the improved async manager
-    async_manager.start_async_manager()
-
-# Add API endpoint for direct chat
-@flask_app.route("/api/chat", methods=["POST"])
+# API endpoint for direct chat requests
+@flask_app.route("/chat", methods=["POST"])
 def api_chat():
-    """Direct API endpoint for chat without Slack"""
-    # Set request context
+    """Handle direct chat requests via API"""
+    # Set request Context
     request_id = logger.set_request_context()
-    
+
     try:
         # Get request data
         data = request.json
         if not data:
             return jsonify({"error": "No data provided"}), 400
-            
-        # Extract message
+        
+        # Extract required fields
+        agent_id = data.get("agent_id")
         message = data.get("message")
+        user_id = request.headers.get("X-User-ID")
+        conversation_id = data.get("conversation_id") or f"{agent_id}:{user_id}:demo_chat"
+        
+        # Validate required fields
+        if not agent_id:
+            return jsonify({"error": "agent_id is required"}), 400
         if not message:
-            return jsonify({"error": "No message provided"}), 400
-            
-        log.info(f"API chat request: {message[:50]}{'...' if len(message) > 50 else ''}")
+            return jsonify({"error": "message is required"}), 400
+        
+        # Log the request
+        log.info(f"API Chat request: {message[:50]}{'...' if len(message) > 50 else ''}")
+        
+        # Get agent configuration
+        agent_config = firebase_service.get_agent(agent_id)
+        if not agent_config:
+            return jsonify({"error": f"Agent not found with ID: {agent_id}"}), 404
         
         # Process the message
-        result = agency.generate_response(message)
+        response_text = process_message(message, conversation_id, agent_config)
         
         # Return the response
         return jsonify({
-            "response": result,
-            "request_id": request_id
+            "response": response_text,
+            "agent_id": agent_id,
+            "conversation_id": conversation_id
         })
+        
     except Exception as e:
         error_id = error_handler.generate_error_id()
         log.error(
-            f"Error in API chat: {str(e)}",
-            exc_info=True, 
+            f"Error in chat API: {str(e)}",
+            exc_info=True,
             extra={"error_id": error_id, "request_id": request_id}
         )
-        
         return jsonify({
             "error": str(e),
             "error_id": error_id
         }), 500
+
+# Dynamic Slack bot endpoints
+@flask_app.route("/slack/events/<bot_id>", methods=["POST"])
+def slack_events(bot_id):
+    """Handle Slack events for a specific bot"""
+    print(f"Received request for bot ID: {bot_id}")
+    
+    # Handle Slack URL verification challenge
+    if request.json and "challenge" in request.json:
+        return request.json["challenge"]
+    
+    # Get the Slack app for this bot
+    slack_app, handler = slack_service.get_bot_app(bot_id)
+    
+    if not slack_app:
+        print(f"No slack app found for bot ID: {bot_id}")
+        return "Bot not found", 404
+    
+    # Get agent configuration for this bot
+    agent_config = slack_service.get_agent_for_bot(bot_id)
+    if not agent_config:
+        print(f"No agent configuration found for bot ID: {bot_id}")
+    
+    # Set up event handlers if not already set
+    if not hasattr(slack_app, "_handlers_set"):
+        setup_bot_handlers(slack_app, agent_config)
+        slack_app._handlers_set = True
+    
+    # Handle the request
+    return handler.handle(request)
+
+# Flask root endpoint
+@flask_app.route("/")
+def index():
+    return "Chat Agency Bot Server is running!"
 
 # Add health check endpoint
 @flask_app.route("/health")
@@ -204,52 +239,21 @@ def health():
     """Health check endpoint"""
     return jsonify({
         "status": "ok",
-        "slack_configured": app_config.slack.is_configured,
         "openai_configured": app_config.openai.is_configured
     })
 
-# Graceful shutdown
-def shutdown_handler():
-    """Handle graceful shutdown"""
-    log.info("Shutting down application")
-    
-    # Shutdown async manager
-    async_manager.shutdown_async_manager()
-    
-    # Shutdown thread pool
-    executor.shutdown(wait=False)
-    
-    log.info("Application shutdown complete")
 
 # Run Flask app
 if __name__ == "__main__":
-    try:
-        # Configure logging
-        log.info("Starting Simple Chat Agency application")
-        
-        # Start the event loop in a separate thread
-        start_event_loop()
-        log.info("Event loop started")
-        
-        # Register shutdown handler
-        atexit.register(shutdown_handler)
-        
-        # If using Socket Mode and Slack is configured
-        if app_config.slack.app_token and bolt_app:
-            log.info("Starting Slack socket mode handler")
-            socket_handler = SocketModeHandler(
-                bolt_app, 
-                app_config.slack.app_token
-            )
-            socket_handler.start()
-        
-        # Run Flask app
-        log.info(f"Starting Flask app on {app_config.flask.host}:{app_config.flask.port}")
-        flask_app.run(
-            debug=app_config.flask.debug,
-            port=app_config.flask.port,
-            host=app_config.flask.host
-        )
-    except Exception as e:
-        log.critical(f"Failed to start application: {str(e)}", exc_info=True)
-        raise
+    # Preload active bots
+    active_bots = slack_service.get_all_active_bots()
+    log.info(f"Preloaded {len(active_bots)} active Slack bots")
+    
+    # Run Flask app
+    log.info(f"Starting Flask app on {app_config.flask.host}:{app_config.flask.port}")
+
+    flask_app.run(
+        debug=app_config.flask.debug,
+        port=app_config.flask.port,
+        host=app_config.flask.host
+    )
