@@ -19,7 +19,7 @@ firebase_service = FirebaseService()
 slack_service = SlackService()
 
 # Initialize Flask app
-flask_app = Flask(__name__)
+app = Flask(__name__)
 
 # Event tracking system to prevent duplicate processing of Slack webhooks
 # Slack sends webhooks every 20 seconds, requiring deduplication
@@ -55,7 +55,6 @@ def process_message(text, conversation_id=None, agent_config=None):
 
 def setup_bot_handlers(slack_app, agent_config):
     """Set up event handlers for a Slack bot"""
-    print(f"Setting up handlers for bot with agent config: {agent_config['name'] if agent_config else 'None'}")
     
     # Use separate handlers for app_mention and message to better control the flow
     @slack_app.event("app_mention")
@@ -144,7 +143,7 @@ def _process_event(event, say, agent_config, slack_app, is_app_mention=False):
         raise e
 
 # API endpoint for direct chat requests
-@flask_app.route("/chat", methods=["POST"])
+@app.route("/chat", methods=["POST"])
 def api_chat():
     """Handle direct chat requests via API"""
     # Set request Context
@@ -199,10 +198,10 @@ def api_chat():
         }), 500
 
 # Dynamic Slack bot endpoints
-@flask_app.route("/slack/events/<bot_id>", methods=["POST"])
+@app.route("/slack/events/<bot_id>", methods=["POST"])
 def slack_events(bot_id):
     """Handle Slack events for a specific bot"""
-    print(f"Received request for bot ID: {bot_id}")
+    log.info(f"Received request for bot ID: {bot_id}")
     
     # Handle Slack URL verification challenge
     if request.json and "challenge" in request.json:
@@ -212,13 +211,13 @@ def slack_events(bot_id):
     slack_app, handler = slack_service.get_bot_app(bot_id)
     
     if not slack_app:
-        print(f"No slack app found for bot ID: {bot_id}")
+        log.error(f"No slack app found for bot ID: {bot_id}")
         return "Bot not found", 404
     
     # Get agent configuration for this bot
     agent_config = slack_service.get_agent_for_bot(bot_id)
     if not agent_config:
-        print(f"No agent configuration found for bot ID: {bot_id}")
+        log.error(f"No agent configuration found for bot ID: {bot_id}")
     
     # Set up event handlers if not already set
     if not hasattr(slack_app, "_handlers_set"):
@@ -229,19 +228,18 @@ def slack_events(bot_id):
     return handler.handle(request)
 
 # Flask root endpoint
-@flask_app.route("/")
+@app.route("/")
 def index():
     return "Chat Agency Bot Server is running!"
 
 # Add health check endpoint
-@flask_app.route("/health")
+@app.route("/health")
 def health():
     """Health check endpoint"""
     return jsonify({
         "status": "ok",
         "openai_configured": app_config.openai.is_configured
     })
-
 
 # Run Flask app
 if __name__ == "__main__":
@@ -252,7 +250,7 @@ if __name__ == "__main__":
     # Run Flask app
     log.info(f"Starting Flask app on {app_config.flask.host}:{app_config.flask.port}")
 
-    flask_app.run(
+    app.run(
         debug=app_config.flask.debug,
         port=app_config.flask.port,
         host=app_config.flask.host
