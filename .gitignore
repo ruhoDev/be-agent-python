@@ -164,3 +164,4 @@ test_agents/
 # SQLite
 *.db
 .vercel
+enabled-prototype-firebase-adminsdk-fbsvc-9011d71d18.json
