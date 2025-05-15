@@ -13,7 +13,7 @@ load_dotenv()
 @dataclass
 class FlaskConfig:
     """Flask web server configuration"""
-    debug: bool = False
+    debug: bool = True
     port: int = 5000
     host: str = "0.0.0.0"
     

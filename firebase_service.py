@@ -19,12 +19,8 @@ class FirebaseService:
         """Initialize Firebase with admin credentials"""
         if not FirebaseService._initialized:
             try:
-                # Path to the Firebase Admin SDK credentials file
-                cred_path = os.path.join(os.path.dirname(__file__), 
-                                       'enabled-prototype-firebase-adminsdk-fbsvc-9011d71d18.json')
-                
-                # Initialize Firebase Admin SDK with credentials
-                cred = credentials.Certificate(cred_path)
+                service_account_info = json.loads(os.environ.get("FIREBASE_SERVICE_ACCOUNT"))
+                cred = credentials.Certificate(service_account_info)
                 firebase_admin.initialize_app(cred)
                 
                 # Get Firestore client

@@ -87,7 +87,7 @@ def generate_response(message, conversation_id=None, agent_config=None):
         temperature=agent_config.get('temperature', 0.4) if agent_config else 0.4,
         max_prompt_tokens=agent_config.get('max_tokens', 25000) if agent_config else 25000,
         shared_instructions="You are a helpful AI assistant that provides accurate and concise responses.",
-        settings_path="/tmp/settings.json",
+        # settings_path="/tmp/settings.json",
         # model=agent_config.get('model', 'gpt-4o-mini') if agent_config else 'gpt-4o-mini',
         threads_callbacks={
             "load": lambda: get_threads_from_db(conversation_id),
